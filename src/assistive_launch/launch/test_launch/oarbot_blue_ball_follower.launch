@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="image_topic" default="rgb_to_depth/image_raw" />
+  <arg name="cmd_vel_topic" default="cmd_vel_arm" />
+  <arg name="debug_image" default="false" />
+  <arg name="debug_image_topic" default="red_ball/debug_image" />
+
+  <arg name="kx" default="0.0015" />
+  <arg name="ky" default="0.0015" />
+  <arg name="max_v" default="0.05" />
+  <arg name="deadband_px" default="10" />
+  <arg name="min_area" default="150.0" />
+  <arg name="stop_on_lost" default="true" />
+  <arg name="lost_timeout" default="0.5" />
+
+  <node pkg="assistive_controllers" type="red_ball_follower.py" name="red_ball_follower" output="screen">
+    <param name="image_topic" value="$(arg image_topic)" />
+    <param name="cmd_vel_topic" value="$(arg cmd_vel_topic)" />
+    <param name="debug_image" value="$(arg debug_image)" />
+    <param name="debug_image_topic" value="$(arg debug_image_topic)" />
+    <param name="kx" value="$(arg kx)" />
+    <param name="ky" value="$(arg ky)" />
+    <param name="max_v" value="$(arg max_v)" />
+    <param name="deadband_px" value="$(arg deadband_px)" />
+    <param name="min_area" value="$(arg min_area)" />
+    <param name="stop_on_lost" value="$(arg stop_on_lost)" />
+    <param name="lost_timeout" value="$(arg lost_timeout)" />
+  </node>
+</launch>

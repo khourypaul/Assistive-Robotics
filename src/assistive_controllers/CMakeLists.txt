@@ -14,6 +14,8 @@ find_package(catkin REQUIRED COMPONENTS
   assistive_msgs
   geometry_msgs
   kinova_msgs
+  sensor_msgs
+  cv_bridge
   tf2
   tf2_ros
 )
@@ -110,7 +112,7 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES assistive_controllers
- CATKIN_DEPENDS roscpp rospy std_msgs tf2 tf2_ros geometry_msgs message_runtime assistive_msgs kinova_msgs
+ CATKIN_DEPENDS roscpp rospy std_msgs tf2 tf2_ros geometry_msgs sensor_msgs cv_bridge message_runtime assistive_msgs kinova_msgs
 #  DEPENDS system_lib
 )
 
