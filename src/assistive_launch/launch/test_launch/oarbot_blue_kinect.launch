@@ -4,7 +4,6 @@
     <machine name="oarbot-blue-P15" address="192.168.1.102" env-loader="/home/oarbot_blue/catkin_ws_assistive/src/assistive_launch/scripts/env_oarbot_blue.sh" user="oarbot_blue" password="1234"  default="true"/>
 
     <arg name="prefix_for_tf" default="j2n6s300_right" />  <!-- Applies to both kinova arm and the kinect -->
-    <arg name="enable_ball_follower" default="false" />
 
     <!-- Launch Azure Kinect -->
     <include file="$(find azure_kinect_ros_driver)/launch/kinect_rgbd.launch">
@@ -70,11 +69,6 @@
     <node name="tf_camera_body_all_joints_broadcaster" pkg="tf_broadcasters" type="tf_camera_body_all_joints_broadcaster" output="screen">
         <rosparam file="$(find assistive_launch)/config/oarbot_blue_tf_camera_body_all_joints.yaml"/>
     </node>
-
-    <include file="$(find assistive_launch)/launch/test_launch/oarbot_blue_ball_follower.launch" if="$(arg enable_ball_follower)">
-        <arg name="image_topic" value="rgb_to_depth/image_raw" />
-        <arg name="cmd_vel_topic" value="cmd_vel_arm" />
-    </include>
 
 </group>
 </launch>
