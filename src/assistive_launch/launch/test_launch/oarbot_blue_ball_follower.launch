@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <launch>
-  <arg name="image_topic" default="rgb_to_depth/image_raw" />
-  <arg name="cmd_vel_topic" default="cmd_vel_arm" />
+  <arg name="image_topic" default="oarbot_blue/rgb/image_raw" />
+  <arg name="cmd_vel_topic" default="oarbot_blue/cmd_vel_arm" />
   <arg name="debug_image" default="false" />
   <arg name="debug_image_topic" default="red_ball/debug_image" />
 
