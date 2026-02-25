@@ -6,8 +6,10 @@ camera_frame_id: ""
 target_frame_id: ""
 
 aruco_dict_name: "DICT_4X4_50"
-min_markers_for_pose: 2
-ransac_reprojection_error: 3.0
+# Minimum detected tags needed to publish the deformable surface.
+min_markers_for_surface: 4
+# Maximum per-tag reprojection error in pixels for accepting tag 3D pose.
+pnp_reprojection_error: 3.0
 tf_lookup_timeout_sec: 0.05
 
 marker_topic_name: "paper_grid_markers"
@@ -19,5 +21,6 @@ debug_image_topic_name: "paper_grid_debug_image"
 grid_line_width: 0.003
 outline_line_width: 0.006
 surface_alpha: 0.12
+point_scale: 0.012
 text_height: 0.03
 text_z_offset: 0.01

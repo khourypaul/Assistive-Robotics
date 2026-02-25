@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 from __future__ import print_function
 
@@ -59,21 +59,33 @@ class PaperGridRvizPublisher(object):
         self.publish_debug_image = rospy.get_param("~publish_debug_image", True)
         self.debug_image_topic_name = rospy.get_param("~debug_image_topic_name", "paper_grid_debug_image")
 
-        self.min_markers_for_pose = int(rospy.get_param("~min_markers_for_pose", 2))
-        self.ransac_reprojection_error = float(rospy.get_param("~ransac_reprojection_error", 3.0))
+        self.min_markers_for_surface = int(
+            rospy.get_param("~min_markers_for_surface", rospy.get_param("~min_markers_for_pose", 4))
+        )
         self.tf_lookup_timeout_sec = float(rospy.get_param("~tf_lookup_timeout_sec", 0.05))
+        self.pnp_reprojection_error = float(rospy.get_param("~pnp_reprojection_error", 3.0))
 
         self.grid_line_width = float(rospy.get_param("~grid_line_width", 0.003))
         self.outline_line_width = float(rospy.get_param("~outline_line_width", 0.006))
         self.surface_alpha = float(rospy.get_param("~surface_alpha", 0.12))
+        self.point_scale = float(rospy.get_param("~point_scale", 0.012))
         self.text_height = float(rospy.get_param("~text_height", 0.03))
         self.text_z_offset = float(rospy.get_param("~text_z_offset", 0.01))
 
         self.layout_data = self._load_layout(self.layout_json_path)
-        self.layout_marker_corners = self._build_layout_marker_corners(self.layout_data)
-        self.layout_marker_centers = self._build_layout_marker_centers(self.layout_marker_corners)
-        self.layout_marker_ids = sorted(self.layout_marker_corners.keys())
-        self.board_outline_local = self._build_board_outline(self.layout_marker_corners)
+        self.grid_rows, self.grid_cols = self._read_grid_shape(self.layout_data)
+        self.layout_marker_ids = []
+        self.id_to_rowcol = {}
+        self.rowcol_to_id = {}
+        self.id_to_size_m = {}
+        self.default_marker_size_m = float(self.layout_data.get("grid", {}).get("marker_mm", 60.0)) / 1000.0
+        self._read_marker_layout(self.layout_data)
+
+        self.boundary_pairs = self._build_boundary_pairs()
+        self.surface_triangles = self._build_surface_triangles()
+        self.mesh_line_pairs = self._build_mesh_line_pairs()
+
+        self.obj_corners_cache = {}
 
         layout_dict_name = self.layout_data.get("grid", {}).get("dict", "DICT_4X4_50")
         self.aruco_dict_name = rospy.get_param("~aruco_dict_name", layout_dict_name)
@@ -82,6 +94,10 @@ class PaperGridRvizPublisher(object):
         self.aruco_detector = None
         if hasattr(cv2.aruco, "ArucoDetector"):
             self.aruco_detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
+
+        self.pnp_square_flag = cv2.SOLVEPNP_ITERATIVE
+        if hasattr(cv2, "SOLVEPNP_IPPE_SQUARE"):
+            self.pnp_square_flag = cv2.SOLVEPNP_IPPE_SQUARE
 
         self.bridge = CvBridge()
         self.marker_pub = rospy.Publisher(self.marker_topic_name, MarkerArray, queue_size=1)
@@ -102,12 +118,11 @@ class PaperGridRvizPublisher(object):
         self.camera_info_sub = rospy.Subscriber(
             self.camera_info_topic_name, CameraInfo, self._camera_info_cb, queue_size=1
         )
-        self.image_sub = rospy.Subscriber(
-            self.image_topic_name, Image, self._image_cb, queue_size=1
-        )
+        self.image_sub = rospy.Subscriber(self.image_topic_name, Image, self._image_cb, queue_size=1)
 
         rospy.loginfo("paper_grid_rviz_publisher initialized.")
         rospy.loginfo("Layout markers loaded: %d", len(self.layout_marker_ids))
+        rospy.loginfo("Grid shape: %d rows x %d cols", self.grid_rows, self.grid_cols)
         rospy.loginfo("Aruco dictionary: %s", self.aruco_dict_name)
 
     def _load_layout(self, path):
@@ -116,40 +131,88 @@ class PaperGridRvizPublisher(object):
         with open(path, "r") as f:
             return json.load(f)
 
-    def _build_layout_marker_corners(self, layout_data):
-        out = {}
-        for marker in layout_data.get("markers", []):
-            marker_id = int(marker["id"])
-            corners = np.asarray(marker["corners_m"], dtype=np.float64)
-            if corners.shape != (4, 3):
-                raise ValueError("Marker {} corners_m must be 4x3".format(marker_id))
-            out[marker_id] = corners
-        if not out:
+    def _read_grid_shape(self, layout_data):
+        grid = layout_data.get("grid", {})
+        rows = int(grid.get("rows", 0))
+        cols = int(grid.get("cols", 0))
+        if rows <= 0 or cols <= 0:
+            raise ValueError("Invalid rows/cols in layout json")
+        return rows, cols
+
+    def _read_marker_layout(self, layout_data):
+        markers = layout_data.get("markers", [])
+        if not markers:
             raise ValueError("Layout has no markers")
-        return out
 
-    def _build_layout_marker_centers(self, marker_corners):
-        centers = {}
-        for marker_id, corners in marker_corners.items():
-            centers[marker_id] = np.mean(corners, axis=0)
-        return centers
+        for marker in markers:
+            marker_id = int(marker["id"])
+            row = int(marker["row"])
+            col = int(marker["col"])
+            size_m = float(marker.get("marker_length_mm", self.default_marker_size_m * 1000.0)) / 1000.0
 
-    def _build_board_outline(self, marker_corners):
-        all_points = np.vstack(list(marker_corners.values()))
-        min_x = float(np.min(all_points[:, 0]))
-        max_x = float(np.max(all_points[:, 0]))
-        min_y = float(np.min(all_points[:, 1]))
-        max_y = float(np.max(all_points[:, 1]))
-        z = 0.0
-        return np.asarray(
-            [
-                [min_x, min_y, z],
-                [max_x, min_y, z],
-                [max_x, max_y, z],
-                [min_x, max_y, z],
-            ],
-            dtype=np.float64,
-        )
+            if not (0 <= row < self.grid_rows and 0 <= col < self.grid_cols):
+                raise ValueError("Marker {} row/col out of bounds".format(marker_id))
+
+            self.layout_marker_ids.append(marker_id)
+            self.id_to_rowcol[marker_id] = (row, col)
+            self.rowcol_to_id[(row, col)] = marker_id
+            self.id_to_size_m[marker_id] = size_m
+
+        self.layout_marker_ids = sorted(self.layout_marker_ids)
+
+    def _build_boundary_pairs(self):
+        pairs = []
+
+        # Top row
+        for c in range(self.grid_cols - 1):
+            pairs.append(((0, c), (0, c + 1)))
+        # Right column
+        for r in range(self.grid_rows - 1):
+            pairs.append(((r, self.grid_cols - 1), (r + 1, self.grid_cols - 1)))
+        # Bottom row (reverse)
+        for c in range(self.grid_cols - 1, 0, -1):
+            pairs.append(((self.grid_rows - 1, c), (self.grid_rows - 1, c - 1)))
+        # Left column (reverse)
+        for r in range(self.grid_rows - 1, 0, -1):
+            pairs.append(((r, 0), (r - 1, 0)))
+
+        id_pairs = []
+        for a_rc, b_rc in pairs:
+            a_id = self.rowcol_to_id.get(a_rc)
+            b_id = self.rowcol_to_id.get(b_rc)
+            if a_id is not None and b_id is not None:
+                id_pairs.append((a_id, b_id))
+        return id_pairs
+
+    def _build_surface_triangles(self):
+        triangles = []
+        for r in range(self.grid_rows - 1):
+            for c in range(self.grid_cols - 1):
+                id00 = self.rowcol_to_id.get((r, c))
+                id01 = self.rowcol_to_id.get((r, c + 1))
+                id10 = self.rowcol_to_id.get((r + 1, c))
+                id11 = self.rowcol_to_id.get((r + 1, c + 1))
+                if id00 is None or id01 is None or id10 is None or id11 is None:
+                    continue
+                triangles.append((id00, id01, id11))
+                triangles.append((id00, id11, id10))
+        return triangles
+
+    def _build_mesh_line_pairs(self):
+        pairs = []
+        for r in range(self.grid_rows):
+            for c in range(self.grid_cols - 1):
+                a_id = self.rowcol_to_id.get((r, c))
+                b_id = self.rowcol_to_id.get((r, c + 1))
+                if a_id is not None and b_id is not None:
+                    pairs.append((a_id, b_id))
+        for r in range(self.grid_rows - 1):
+            for c in range(self.grid_cols):
+                a_id = self.rowcol_to_id.get((r, c))
+                b_id = self.rowcol_to_id.get((r + 1, c))
+                if a_id is not None and b_id is not None:
+                    pairs.append((a_id, b_id))
+        return pairs
 
     def _make_aruco_dict(self, name):
         if name not in ARUCO_DICT:
@@ -177,6 +240,52 @@ class PaperGridRvizPublisher(object):
             return self.aruco_detector.detectMarkers(gray)
         return cv2.aruco.detectMarkers(gray, self.aruco_dict, parameters=self.aruco_params)
 
+    def _marker_object_corners(self, marker_size_m):
+        key = round(float(marker_size_m), 6)
+        if key in self.obj_corners_cache:
+            return self.obj_corners_cache[key]
+
+        half = key * 0.5
+        obj = np.asarray(
+            [
+                [-half, half, 0.0],   # top-left
+                [half, half, 0.0],    # top-right
+                [half, -half, 0.0],   # bottom-right
+                [-half, -half, 0.0],  # bottom-left
+            ],
+            dtype=np.float64,
+        )
+        self.obj_corners_cache[key] = obj
+        return obj
+
+    def _estimate_marker_center_cam(self, marker_corners_img, marker_size_m, K, D):
+        obj = self._marker_object_corners(marker_size_m)
+        success, rvec, tvec = cv2.solvePnP(
+            obj,
+            marker_corners_img,
+            K,
+            D,
+            flags=self.pnp_square_flag,
+        )
+        if not success and self.pnp_square_flag != cv2.SOLVEPNP_ITERATIVE:
+            success, rvec, tvec = cv2.solvePnP(
+                obj,
+                marker_corners_img,
+                K,
+                D,
+                flags=cv2.SOLVEPNP_ITERATIVE,
+            )
+        if not success:
+            return None, None, None
+
+        projected, _ = cv2.projectPoints(obj, rvec, tvec, K, D)
+        reproj_error = np.mean(np.linalg.norm(projected.reshape(-1, 2) - marker_corners_img, axis=1))
+        if reproj_error > self.pnp_reprojection_error:
+            return None, None, None
+
+        center_cam = np.asarray(tvec, dtype=np.float64).reshape(3)
+        return center_cam, rvec, tvec
+
     def _image_cb(self, msg):
         with self.data_lock:
             if not self.camera_info_ready:
@@ -195,98 +304,54 @@ class PaperGridRvizPublisher(object):
             rospy.logwarn_throttle(5.0, "cv_bridge conversion failed: %s", str(exc))
             return
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        corners, ids, _ = self._detect_markers(gray)
-
-        if self.publish_debug_image and self.debug_image_pub is not None:
-            debug_img = frame.copy()
-            if ids is not None and len(ids) > 0 and hasattr(cv2.aruco, "drawDetectedMarkers"):
-                cv2.aruco.drawDetectedMarkers(debug_img, corners, ids)
-            self._publish_debug_image(debug_img, msg.header.stamp)
-
-        if ids is None or len(ids) == 0:
-            self._clear_markers_if_needed(msg.header.stamp, camera_frame_id)
-            return
-
-        ids = ids.flatten().tolist()
-        object_points = []
-        image_points = []
-        matched_marker_ids = []
-
-        for i, marker_id in enumerate(ids):
-            if marker_id not in self.layout_marker_corners:
-                continue
-            marker_corners_local = self.layout_marker_corners[marker_id]
-            marker_corners_image = np.asarray(corners[i], dtype=np.float64).reshape(4, 2)
-            object_points.extend(marker_corners_local.tolist())
-            image_points.extend(marker_corners_image.tolist())
-            matched_marker_ids.append(marker_id)
-
-        unique_count = len(set(matched_marker_ids))
-        if unique_count < self.min_markers_for_pose:
-            self._clear_markers_if_needed(msg.header.stamp, camera_frame_id)
-            rospy.logwarn_throttle(
-                2.0,
-                "Detected %d layout markers, need at least %d.",
-                unique_count,
-                self.min_markers_for_pose,
-            )
-            return
-
-        object_points = np.asarray(object_points, dtype=np.float64)
-        image_points = np.asarray(image_points, dtype=np.float64)
-
-        if object_points.shape[0] < 4:
-            self._clear_markers_if_needed(msg.header.stamp, camera_frame_id)
-            return
-
-        success, rvec, tvec, inliers = cv2.solvePnPRansac(
-            object_points,
-            image_points,
-            K,
-            D,
-            flags=cv2.SOLVEPNP_ITERATIVE,
-            reprojectionError=self.ransac_reprojection_error,
-            confidence=0.99,
-            iterationsCount=200,
-        )
-        if not success:
-            self._clear_markers_if_needed(msg.header.stamp, camera_frame_id)
-            rospy.logwarn_throttle(2.0, "solvePnPRansac failed for paper board.")
-            return
-
-        if inliers is not None and len(inliers) >= 4:
-            inlier_idx = inliers.flatten()
-            inlier_obj = object_points[inlier_idx]
-            inlier_img = image_points[inlier_idx]
-            success_refine, rvec_refine, tvec_refine = cv2.solvePnP(
-                inlier_obj,
-                inlier_img,
-                K,
-                D,
-                rvec,
-                tvec,
-                useExtrinsicGuess=True,
-                flags=cv2.SOLVEPNP_ITERATIVE,
-            )
-            if success_refine:
-                rvec = rvec_refine
-                tvec = tvec_refine
-
-        R_co, _ = cv2.Rodrigues(rvec)
-        t_co = np.asarray(tvec, dtype=np.float64).reshape(3, 1)
-
         stamp = msg.header.stamp if msg.header.stamp != rospy.Time(0) else rospy.Time.now()
         target_frame = self.target_frame_id if self.target_frame_id else camera_frame_id
         R_tc, t_tc = self._camera_to_target_transform(camera_frame_id, target_frame, stamp)
         if R_tc is None:
             return
 
-        R_to = np.matmul(R_tc, R_co)
-        t_to = np.matmul(R_tc, t_co) + t_tc
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        corners, ids, _ = self._detect_markers(gray)
 
-        self._publish_pose(stamp, target_frame, R_to, t_to)
-        self._publish_markers(stamp, target_frame, R_to, t_to)
+        detected_points_target = {}
+
+        if ids is not None and len(ids) > 0:
+            ids = ids.flatten().tolist()
+            for i, marker_id in enumerate(ids):
+                if marker_id not in self.id_to_rowcol:
+                    continue
+                marker_size_m = self.id_to_size_m.get(marker_id, self.default_marker_size_m)
+                marker_corners_img = np.asarray(corners[i], dtype=np.float64).reshape(4, 2)
+
+                center_cam, rvec, tvec = self._estimate_marker_center_cam(
+                    marker_corners_img, marker_size_m, K, D
+                )
+                if center_cam is None:
+                    continue
+
+                center_target = np.matmul(R_tc, center_cam.reshape(3, 1)) + t_tc
+                detected_points_target[marker_id] = center_target.reshape(3)
+
+                if self.publish_debug_image and hasattr(cv2.aruco, "drawDetectedMarkers"):
+                    cv2.aruco.drawDetectedMarkers(frame, [corners[i]], np.asarray([[marker_id]], dtype=np.int32))
+                    if hasattr(cv2.aruco, "drawAxis"):
+                        cv2.aruco.drawAxis(frame, K, D, rvec, tvec, marker_size_m * 0.5)
+
+        if self.publish_debug_image and self.debug_image_pub is not None:
+            self._publish_debug_image(frame, stamp)
+
+        if len(detected_points_target) < self.min_markers_for_surface:
+            self._clear_markers_if_needed(stamp, target_frame)
+            rospy.logwarn_throttle(
+                2.0,
+                "Detected %d layout markers, need at least %d for deformable surface.",
+                len(detected_points_target),
+                self.min_markers_for_surface,
+            )
+            return
+
+        self._publish_pose_from_points(stamp, target_frame, detected_points_target)
+        self._publish_deformed_markers(stamp, target_frame, detected_points_target)
         self.markers_visible = True
 
     def _camera_to_target_transform(self, camera_frame_id, target_frame_id, stamp):
@@ -365,25 +430,6 @@ class PaperGridRvizPublisher(object):
             qz = 0.25 * s
         return qx, qy, qz, qw
 
-    def _transform_points(self, points_local, R_to, t_to):
-        points_local = np.asarray(points_local, dtype=np.float64)
-        points_world = np.matmul(R_to, points_local.T) + t_to
-        return points_world.T
-
-    def _publish_pose(self, stamp, frame_id, R_to, t_to):
-        qx, qy, qz, qw = self._rot_to_quat(R_to)
-        msg = PoseStamped()
-        msg.header.stamp = stamp
-        msg.header.frame_id = frame_id
-        msg.pose.position.x = float(t_to[0, 0])
-        msg.pose.position.y = float(t_to[1, 0])
-        msg.pose.position.z = float(t_to[2, 0])
-        msg.pose.orientation.x = qx
-        msg.pose.orientation.y = qy
-        msg.pose.orientation.z = qz
-        msg.pose.orientation.w = qw
-        self.pose_pub.publish(msg)
-
     @staticmethod
     def _to_point(x, y, z):
         p = Point()
@@ -392,11 +438,53 @@ class PaperGridRvizPublisher(object):
         p.z = float(z)
         return p
 
-    def _publish_markers(self, stamp, frame_id, R_to, t_to):
+    def _publish_pose_from_points(self, stamp, frame_id, points_by_id):
+        if len(points_by_id) < 3:
+            return
+
+        pts = np.asarray(list(points_by_id.values()), dtype=np.float64)
+        centroid = np.mean(pts, axis=0)
+        centered = pts - centroid
+
+        try:
+            _, _, vh = np.linalg.svd(centered, full_matrices=False)
+        except np.linalg.LinAlgError:
+            return
+
+        x_axis = vh[0, :]
+        normal = vh[2, :]
+
+        if np.linalg.norm(x_axis) < 1e-8 or np.linalg.norm(normal) < 1e-8:
+            return
+
+        x_axis = x_axis / np.linalg.norm(x_axis)
+        normal = normal / np.linalg.norm(normal)
+        y_axis = np.cross(normal, x_axis)
+        if np.linalg.norm(y_axis) < 1e-8:
+            return
+        y_axis = y_axis / np.linalg.norm(y_axis)
+        x_axis = np.cross(y_axis, normal)
+        x_axis = x_axis / np.linalg.norm(x_axis)
+
+        R = np.column_stack((x_axis, y_axis, normal))
+        qx, qy, qz, qw = self._rot_to_quat(R)
+
+        msg = PoseStamped()
+        msg.header.stamp = stamp
+        msg.header.frame_id = frame_id
+        msg.pose.position.x = float(centroid[0])
+        msg.pose.position.y = float(centroid[1])
+        msg.pose.position.z = float(centroid[2])
+        msg.pose.orientation.x = qx
+        msg.pose.orientation.y = qy
+        msg.pose.orientation.z = qz
+        msg.pose.orientation.w = qw
+        self.pose_pub.publish(msg)
+
+    def _publish_deformed_markers(self, stamp, frame_id, points_by_id):
         msg = MarkerArray()
 
-        outline_world = self._transform_points(self.board_outline_local, R_to, t_to)
-
+        # Deformed surface from detected tag points.
         surface = Marker()
         surface.header.stamp = stamp
         surface.header.frame_id = frame_id
@@ -412,37 +500,23 @@ class PaperGridRvizPublisher(object):
         surface.color.g = 0.5
         surface.color.b = 1.0
         surface.color.a = self.surface_alpha
-        surface.points.append(self._to_point(*outline_world[0]))
-        surface.points.append(self._to_point(*outline_world[1]))
-        surface.points.append(self._to_point(*outline_world[2]))
-        surface.points.append(self._to_point(*outline_world[0]))
-        surface.points.append(self._to_point(*outline_world[2]))
-        surface.points.append(self._to_point(*outline_world[3]))
+
+        for tri in self.surface_triangles:
+            if tri[0] in points_by_id and tri[1] in points_by_id and tri[2] in points_by_id:
+                p0 = points_by_id[tri[0]]
+                p1 = points_by_id[tri[1]]
+                p2 = points_by_id[tri[2]]
+                surface.points.append(self._to_point(*p0))
+                surface.points.append(self._to_point(*p1))
+                surface.points.append(self._to_point(*p2))
         msg.markers.append(surface)
 
-        outline = Marker()
-        outline.header.stamp = stamp
-        outline.header.frame_id = frame_id
-        outline.ns = "paper_outline"
-        outline.id = 1
-        outline.type = Marker.LINE_STRIP
-        outline.action = Marker.ADD
-        outline.pose.orientation.w = 1.0
-        outline.scale.x = self.outline_line_width
-        outline.color.r = 1.0
-        outline.color.g = 0.2
-        outline.color.b = 0.2
-        outline.color.a = 1.0
-        for pt in outline_world:
-            outline.points.append(self._to_point(*pt))
-        outline.points.append(self._to_point(*outline_world[0]))
-        msg.markers.append(outline)
-
+        # Mesh lines between neighboring tags.
         grid = Marker()
         grid.header.stamp = stamp
         grid.header.frame_id = frame_id
         grid.ns = "aruco_grid"
-        grid.id = 2
+        grid.id = 1
         grid.type = Marker.LINE_LIST
         grid.action = Marker.ADD
         grid.pose.orientation.w = 1.0
@@ -451,29 +525,65 @@ class PaperGridRvizPublisher(object):
         grid.color.g = 1.0
         grid.color.b = 0.2
         grid.color.a = 0.95
-
-        for marker_id in self.layout_marker_ids:
-            corners_world = self._transform_points(self.layout_marker_corners[marker_id], R_to, t_to)
-            edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
-            for a, b in edges:
-                grid.points.append(self._to_point(*corners_world[a]))
-                grid.points.append(self._to_point(*corners_world[b]))
+        for a_id, b_id in self.mesh_line_pairs:
+            if a_id in points_by_id and b_id in points_by_id:
+                grid.points.append(self._to_point(*points_by_id[a_id]))
+                grid.points.append(self._to_point(*points_by_id[b_id]))
         msg.markers.append(grid)
 
-        for i, marker_id in enumerate(self.layout_marker_ids):
-            center_world = self._transform_points(
-                np.asarray([self.layout_marker_centers[marker_id]]), R_to, t_to
-            )[0]
+        # Boundary lines.
+        outline = Marker()
+        outline.header.stamp = stamp
+        outline.header.frame_id = frame_id
+        outline.ns = "paper_outline"
+        outline.id = 2
+        outline.type = Marker.LINE_LIST
+        outline.action = Marker.ADD
+        outline.pose.orientation.w = 1.0
+        outline.scale.x = self.outline_line_width
+        outline.color.r = 1.0
+        outline.color.g = 0.2
+        outline.color.b = 0.2
+        outline.color.a = 1.0
+        for a_id, b_id in self.boundary_pairs:
+            if a_id in points_by_id and b_id in points_by_id:
+                outline.points.append(self._to_point(*points_by_id[a_id]))
+                outline.points.append(self._to_point(*points_by_id[b_id]))
+        msg.markers.append(outline)
+
+        # Tag points.
+        points_marker = Marker()
+        points_marker.header.stamp = stamp
+        points_marker.header.frame_id = frame_id
+        points_marker.ns = "paper_points"
+        points_marker.id = 3
+        points_marker.type = Marker.SPHERE_LIST
+        points_marker.action = Marker.ADD
+        points_marker.pose.orientation.w = 1.0
+        points_marker.scale.x = self.point_scale
+        points_marker.scale.y = self.point_scale
+        points_marker.scale.z = self.point_scale
+        points_marker.color.r = 1.0
+        points_marker.color.g = 0.8
+        points_marker.color.b = 0.0
+        points_marker.color.a = 1.0
+        for marker_id in sorted(points_by_id.keys()):
+            points_marker.points.append(self._to_point(*points_by_id[marker_id]))
+        msg.markers.append(points_marker)
+
+        # Tag IDs on top of detected points.
+        for marker_id in sorted(points_by_id.keys()):
+            p = points_by_id[marker_id]
             text = Marker()
             text.header.stamp = stamp
             text.header.frame_id = frame_id
             text.ns = "aruco_ids"
-            text.id = 100 + i
+            text.id = 1000 + int(marker_id)
             text.type = Marker.TEXT_VIEW_FACING
             text.action = Marker.ADD
-            text.pose.position.x = float(center_world[0])
-            text.pose.position.y = float(center_world[1])
-            text.pose.position.z = float(center_world[2] + self.text_z_offset)
+            text.pose.position.x = float(p[0])
+            text.pose.position.y = float(p[1])
+            text.pose.position.z = float(p[2] + self.text_z_offset)
             text.pose.orientation.w = 1.0
             text.scale.z = self.text_height
             text.color.r = 1.0
