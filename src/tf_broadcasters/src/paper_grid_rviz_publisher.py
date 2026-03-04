@@ -58,6 +58,11 @@ class PaperGridRvizPublisher(object):
         self.pose_topic_name = rospy.get_param("~pose_topic_name", "paper_grid_pose")
         self.publish_debug_image = rospy.get_param("~publish_debug_image", True)
         self.debug_image_topic_name = rospy.get_param("~debug_image_topic_name", "paper_grid_debug_image")
+        self.depth_image_topic_name = rospy.get_param("~depth_image_topic_name", "")
+        self.use_depth_for_3d_points = rospy.get_param("~use_depth_for_3d_points", False)
+        self.depth_unit_scale = float(rospy.get_param("~depth_unit_scale", 0.001))  # mm->m for 16UC1
+        self.depth_max_age_sec = float(rospy.get_param("~depth_max_age_sec", 0.15))
+        self.depth_patch_radius_px = int(rospy.get_param("~depth_patch_radius_px", 2))
 
         self.min_markers_for_surface = int(
             rospy.get_param("~min_markers_for_surface", rospy.get_param("~min_markers_for_pose", 4))
@@ -71,6 +76,8 @@ class PaperGridRvizPublisher(object):
         self.point_scale = float(rospy.get_param("~point_scale", 0.012))
         self.text_height = float(rospy.get_param("~text_height", 0.03))
         self.text_z_offset = float(rospy.get_param("~text_z_offset", 0.01))
+        self.normal_length = float(rospy.get_param("~normal_length", 0.05))
+        self.normal_line_width = float(rospy.get_param("~normal_line_width", 0.003))
 
         self.layout_data = self._load_layout(self.layout_json_path)
         self.grid_rows, self.grid_cols = self._read_grid_shape(self.layout_data)
@@ -114,11 +121,20 @@ class PaperGridRvizPublisher(object):
         self.camera_info_ready = False
         self.markers_visible = False
         self.data_lock = threading.Lock()
+        self.depth_lock = threading.Lock()
+        self.latest_depth = None
+        self.latest_depth_stamp = None
 
         self.camera_info_sub = rospy.Subscriber(
             self.camera_info_topic_name, CameraInfo, self._camera_info_cb, queue_size=1
         )
         self.image_sub = rospy.Subscriber(self.image_topic_name, Image, self._image_cb, queue_size=1)
+        self.depth_sub = None
+        if self.depth_image_topic_name:
+            self.depth_sub = rospy.Subscriber(self.depth_image_topic_name, Image, self._depth_cb, queue_size=1)
+            rospy.loginfo("Depth subscription enabled: %s", self.depth_image_topic_name)
+            if not self.use_depth_for_3d_points:
+                rospy.logwarn("Depth topic provided but ~use_depth_for_3d_points is false.")
 
         rospy.loginfo("paper_grid_rviz_publisher initialized.")
         rospy.loginfo("Layout markers loaded: %d", len(self.layout_marker_ids))
@@ -235,6 +251,15 @@ class PaperGridRvizPublisher(object):
             if not self.camera_frame_id:
                 self.camera_frame_id = msg.header.frame_id
 
+    def _depth_cb(self, msg):
+        try:
+            depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+        except CvBridgeError:
+            return
+        with self.depth_lock:
+            self.latest_depth = depth
+            self.latest_depth_stamp = msg.header.stamp
+
     def _detect_markers(self, gray):
         if self.aruco_detector is not None:
             return self.aruco_detector.detectMarkers(gray)
@@ -286,6 +311,51 @@ class PaperGridRvizPublisher(object):
         center_cam = np.asarray(tvec, dtype=np.float64).reshape(3)
         return center_cam, rvec, tvec
 
+    def _depth_value_to_m(self, val):
+        if np.isnan(val) or np.isinf(val):
+            return None
+        if val <= 0:
+            return None
+        return float(val) * self.depth_unit_scale
+
+    def _sample_depth_m(self, depth_img, u, v):
+        h, w = depth_img.shape[:2]
+        uu = int(round(u))
+        vv = int(round(v))
+        if uu < 0 or uu >= w or vv < 0 or vv >= h:
+            return None
+
+        r = max(0, self.depth_patch_radius_px)
+        u0 = max(0, uu - r)
+        u1 = min(w, uu + r + 1)
+        v0 = max(0, vv - r)
+        v1 = min(h, vv + r + 1)
+
+        patch = depth_img[v0:v1, u0:u1]
+        if patch.size == 0:
+            return None
+
+        vals = patch.reshape(-1)
+        depth_m_vals = []
+        for x in vals:
+            d = self._depth_value_to_m(float(x))
+            if d is not None:
+                depth_m_vals.append(d)
+
+        if not depth_m_vals:
+            return None
+        return float(np.median(np.asarray(depth_m_vals, dtype=np.float64)))
+
+    @staticmethod
+    def _pixel_to_cam(K, u, v, z_m):
+        fx = K[0, 0]
+        fy = K[1, 1]
+        cx = K[0, 2]
+        cy = K[1, 2]
+        x = (u - cx) * z_m / fx
+        y = (v - cy) * z_m / fy
+        return np.asarray([x, y, z_m], dtype=np.float64)
+
     def _image_cb(self, msg):
         with self.data_lock:
             if not self.camera_info_ready:
@@ -314,6 +384,14 @@ class PaperGridRvizPublisher(object):
         corners, ids, _ = self._detect_markers(gray)
 
         detected_points_target = {}
+        detected_normals_target = {}
+        depth_img = None
+        depth_stamp = None
+        if self.use_depth_for_3d_points:
+            with self.depth_lock:
+                if self.latest_depth is not None:
+                    depth_img = self.latest_depth.copy()
+                    depth_stamp = self.latest_depth_stamp
 
         if ids is not None and len(ids) > 0:
             ids = ids.flatten().tolist()
@@ -329,8 +407,26 @@ class PaperGridRvizPublisher(object):
                 if center_cam is None:
                     continue
 
+                R_cm, _ = cv2.Rodrigues(rvec)
+                normal_cam = R_cm[:, 2]
+                if np.linalg.norm(normal_cam) > 1e-8:
+                    normal_cam = normal_cam / np.linalg.norm(normal_cam)
+
+                # Optional depth override for better non-planar reconstruction.
+                if self.use_depth_for_3d_points and depth_img is not None and depth_stamp is not None:
+                    age = abs((stamp - depth_stamp).to_sec())
+                    if age <= self.depth_max_age_sec:
+                        center_px = np.mean(marker_corners_img, axis=0)
+                        depth_m = self._sample_depth_m(depth_img, center_px[0], center_px[1])
+                        if depth_m is not None:
+                            center_cam = self._pixel_to_cam(K, center_px[0], center_px[1], depth_m)
+
                 center_target = np.matmul(R_tc, center_cam.reshape(3, 1)) + t_tc
                 detected_points_target[marker_id] = center_target.reshape(3)
+                normal_target = np.matmul(R_tc, normal_cam.reshape(3, 1)).reshape(3)
+                if np.linalg.norm(normal_target) > 1e-8:
+                    normal_target = normal_target / np.linalg.norm(normal_target)
+                detected_normals_target[marker_id] = normal_target
 
                 if self.publish_debug_image and hasattr(cv2.aruco, "drawDetectedMarkers"):
                     cv2.aruco.drawDetectedMarkers(frame, [corners[i]], np.asarray([[marker_id]], dtype=np.int32))
@@ -351,7 +447,7 @@ class PaperGridRvizPublisher(object):
             return
 
         self._publish_pose_from_points(stamp, target_frame, detected_points_target)
-        self._publish_deformed_markers(stamp, target_frame, detected_points_target)
+        self._publish_deformed_markers(stamp, target_frame, detected_points_target, detected_normals_target)
         self.markers_visible = True
 
     def _camera_to_target_transform(self, camera_frame_id, target_frame_id, stamp):
@@ -481,7 +577,7 @@ class PaperGridRvizPublisher(object):
         msg.pose.orientation.w = qw
         self.pose_pub.publish(msg)
 
-    def _publish_deformed_markers(self, stamp, frame_id, points_by_id):
+    def _publish_deformed_markers(self, stamp, frame_id, points_by_id, normals_by_id):
         msg = MarkerArray()
 
         # Deformed surface from detected tag points.
@@ -592,6 +688,30 @@ class PaperGridRvizPublisher(object):
             text.color.a = 1.0
             text.text = str(marker_id)
             msg.markers.append(text)
+
+        # Per-tag surface normals.
+        normals = Marker()
+        normals.header.stamp = stamp
+        normals.header.frame_id = frame_id
+        normals.ns = "paper_normals"
+        normals.id = 4
+        normals.type = Marker.LINE_LIST
+        normals.action = Marker.ADD
+        normals.pose.orientation.w = 1.0
+        normals.scale.x = self.normal_line_width
+        normals.color.r = 1.0
+        normals.color.g = 0.0
+        normals.color.b = 1.0
+        normals.color.a = 1.0
+        for marker_id in sorted(points_by_id.keys()):
+            if marker_id not in normals_by_id:
+                continue
+            p = points_by_id[marker_id]
+            n = normals_by_id[marker_id]
+            p2 = p + n * self.normal_length
+            normals.points.append(self._to_point(*p))
+            normals.points.append(self._to_point(*p2))
+        msg.markers.append(normals)
 
         self.marker_pub.publish(msg)
 

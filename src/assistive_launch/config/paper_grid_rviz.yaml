@@ -4,6 +4,11 @@ image_topic_name: "/nuc/rgb/image_raw"
 camera_info_topic_name: "/nuc/rgb/camera_info"
 camera_frame_id: ""
 target_frame_id: ""
+depth_image_topic_name: ""
+use_depth_for_3d_points: false
+depth_unit_scale: 0.001
+depth_max_age_sec: 0.15
+depth_patch_radius_px: 2
 
 aruco_dict_name: "DICT_4X4_50"
 # Minimum detected tags needed to publish the deformable surface.
@@ -24,3 +29,5 @@ surface_alpha: 0.12
 point_scale: 0.012
 text_height: 0.03
 text_z_offset: 0.01
+normal_length: 0.05
+normal_line_width: 0.003
