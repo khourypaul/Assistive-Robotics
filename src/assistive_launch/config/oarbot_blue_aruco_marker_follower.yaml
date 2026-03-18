@@ -1,0 +1,59 @@
+# ArUco Marker Follower – oarbot_blue (j2n6s300 RIGHT arm)
+# Used by: assistive_launch/launch/test_launch/aruco_marker_follower.launch
+#
+# TF prerequisites (must be running before this node):
+#   1. NUC kinect + aruco broadcaster  (publishes cage_rgb_camera_link -> map)
+#      roslaunch assistive_launch nuc_kinect_with_aruco.launch
+#   2. Arm stack on oarbot_blue        (arm driver + freq_adjuster + TF broadcasters)
+#      roslaunch assistive_launch oarbot_blue_arm_with_ft.launch
+#      (also: oarbot_blue.launch for twist_mux + redundancy_resolver)
+#
+# ── Marker ────────────────────────────────────────────────────────────────────
+marker_id:       0           # ArUco ID to track
+marker_size_m:   0.05        # Physical marker side length in metres
+aruco_dict_type: DICT_4X4_50
+
+# ── Camera ────────────────────────────────────────────────────────────────────
+# NUC overhead Azure Kinect (primary sensor for robot localisation)
+image_topic:         /nuc/k4a/rgb/image_raw
+camera_info_topic:   /nuc/k4a/rgb/camera_info
+camera_frame_id:     ''         # Leave empty → use frame_id from camera_info header
+
+# ── TF frames ─────────────────────────────────────────────────────────────────
+base_frame_id:       d1_tf_base_link           # Robot mobile base frame (oarbot_blue)
+ee_frame_id:         j2n6s300_right_end_effector
+
+# ── Marker TF broadcast ───────────────────────────────────────────────────────
+tf_broadcast_marker: true
+marker_tf_prefix:    aruco_marker_   # Resulting frame: aruco_marker_<marker_id>
+
+# ── Approach geometry ─────────────────────────────────────────────────────────
+# Stand-off from marker centre along marker +Z axis (toward camera).
+# Increase this value for a safer approach distance.
+approach_offset_m:   0.15
+
+# ── Motion command ────────────────────────────────────────────────────────────
+cmd_vel_topic: cmd_vel   # Must match the topic consumed by twist_mux (oarbot_blue ns)
+
+# ── Control law ───────────────────────────────────────────────────────────────
+pub_rate:       25.0    # Hz – must be <= min_rate_cmd_vel in redundancy_resolver config
+
+K_lin:          1.0     # Proportional gain (position error [m] -> velocity [m/s])
+K_ang:          0.0     # Proportional gain for orientation (0 = position-only control)
+
+max_lin_vel:    0.05    # m/s  (conservative – increase only after testing)
+max_ang_vel:    0.20    # rad/s
+
+position_err_thres:     0.010   # 1 cm dead-zone (stops commanding when within this)
+orientation_err_thres:  0.050   # ~3° dead-zone
+
+marker_lost_timeout:    1.0     # seconds – stop if marker not seen for this long
+
+# ── Motion enable ─────────────────────────────────────────────────────────────
+# Starts DISABLED for safety. Enable at runtime:
+#   rosservice call /oarbot_blue/aruco_marker_follower/toggle_motion "data: true"
+enable_motion: false
+
+# ── Debug image ───────────────────────────────────────────────────────────────
+debug_image_view:  false        # Set to true to publish annotated image
+debug_image_topic: aruco_debug_image

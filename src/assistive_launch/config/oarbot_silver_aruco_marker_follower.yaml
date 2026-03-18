@@ -1,0 +1,56 @@
+# ArUco Marker Follower – oarbot_silver (j2n6s300 LEFT arm)
+# Used by: assistive_launch/launch/test_launch/aruco_marker_follower.launch
+#
+# TF prerequisites (must be running before this node):
+#   1. NUC kinect + aruco broadcaster  (publishes cage_rgb_camera_link -> map)
+#      roslaunch assistive_launch nuc_kinect_with_aruco.launch
+#   2. Arm stack on oarbot_silver      (arm driver + freq_adjuster + TF broadcasters)
+#      roslaunch assistive_launch oarbot_silver_arm_with_ft.launch
+#      (also: oarbot_silver.launch for twist_mux + redundancy_resolver)
+#
+# ── Marker ────────────────────────────────────────────────────────────────────
+marker_id:       0           # ArUco ID to track
+marker_size_m:   0.05        # Physical marker side length in metres
+aruco_dict_type: DICT_4X4_50
+
+# ── Camera ────────────────────────────────────────────────────────────────────
+image_topic:         /nuc/k4a/rgb/image_raw
+camera_info_topic:   /nuc/k4a/rgb/camera_info
+camera_frame_id:     ''
+
+# ── TF frames ─────────────────────────────────────────────────────────────────
+base_frame_id:       d2_tf_base_link           # Robot mobile base frame (oarbot_silver)
+ee_frame_id:         j2n6s300_left_end_effector
+
+# ── Marker TF broadcast ───────────────────────────────────────────────────────
+tf_broadcast_marker: true
+marker_tf_prefix:    aruco_marker_
+
+# ── Approach geometry ─────────────────────────────────────────────────────────
+approach_offset_m:   0.15
+
+# ── Motion command ────────────────────────────────────────────────────────────
+cmd_vel_topic: cmd_vel   # Within oarbot_silver namespace
+
+# ── Control law ───────────────────────────────────────────────────────────────
+pub_rate:       25.0
+
+K_lin:          1.0
+K_ang:          0.0
+
+max_lin_vel:    0.05
+max_ang_vel:    0.20
+
+position_err_thres:     0.010
+orientation_err_thres:  0.050
+
+marker_lost_timeout:    1.0
+
+# ── Motion enable ─────────────────────────────────────────────────────────────
+# Enable at runtime:
+#   rosservice call /oarbot_silver/aruco_marker_follower/toggle_motion "data: true"
+enable_motion: false
+
+# ── Debug image ───────────────────────────────────────────────────────────────
+debug_image_view:  false
+debug_image_topic: aruco_debug_image

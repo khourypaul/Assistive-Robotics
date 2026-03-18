@@ -1,0 +1,117 @@
+<?xml version="1.0"?>
+<launch>
+
+  <!--
+    aruco_marker_follower.launch
+    ============================
+    Launches the ArUco marker follower node for one oarbot.
+
+    The node:
+      1. Subscribes to a camera image stream.
+      2. Detects the configured ArUco marker and estimates its 6-DOF pose.
+      3. Broadcasts the marker frame to TF2.
+      4. Publishes geometry_msgs/Twist on 'cmd_vel' (robot-base frame) so the
+         end-effector moves toward the marker.
+
+    Motion command pipeline (unchanged from existing infrastructure):
+      cmd_vel  ->  twist_mux  ->  oarbot_redundancy_resolver
+               ->  freq_adjuster_arm  ->  j2n6s300_*_driver/in/cartesian_velocity
+
+    PREREQUISITES – must be running before this launch:
+      (A) NUC overhead Kinect + ArUco broadcaster (for TF cage_rgb_camera_link->map):
+              roslaunch assistive_launch nuc_kinect_with_aruco.launch
+              (or ssh nuc: roslaunch assistive_launch nuc_kinect_with_aruco.launch)
+
+      (B) Full oarbot stack (Kinova driver, freq_adjuster, redundancy_resolver,
+          twist_mux, TF broadcasters):
+              roslaunch assistive_launch oarbot_blue.launch    # for robot:=blue
+              roslaunch assistive_launch oarbot_silver.launch  # for robot:=silver
+
+    Arguments
+    ---------
+    robot    : 'blue'   -> oarbot_blue  (j2n6s300 RIGHT arm)  [default]
+               'silver' -> oarbot_silver (j2n6s300 LEFT arm)
+
+    marker_id      : ArUco marker ID to track (default: 0)
+    approach_offset: Stand-off distance from marker in metres (default: 0.15)
+    enable_motion  : Whether to send velocity commands on launch (default: false)
+    debug          : Publish annotated debug image (default: false)
+
+    Usage examples
+    --------------
+    # Track marker 0 with oarbot_blue, motion disabled (safe default):
+    roslaunch assistive_launch aruco_marker_follower.launch
+
+    # Track marker 5, approach offset 20 cm, start with motion enabled:
+    roslaunch assistive_launch aruco_marker_follower.launch \
+        marker_id:=5 approach_offset:=0.20 enable_motion:=true
+
+    # oarbot_silver, with debug image:
+    roslaunch assistive_launch aruco_marker_follower.launch robot:=silver debug:=true
+
+    # Enable/disable motion at runtime (while node is running):
+    rosservice call /oarbot_blue/aruco_marker_follower/toggle_motion "data: true"
+    rosservice call /oarbot_blue/aruco_marker_follower/toggle_motion "data: false"
+
+    # Verify detected marker pose in TF:
+    rosrun tf tf_echo d1_tf_base_link aruco_marker_0
+
+    # Watch cmd_vel commands:
+    rostopic echo /oarbot_blue/cmd_vel
+  -->
+
+  <arg name="robot"           default="blue"  doc="'blue' or 'silver'" />
+  <arg name="marker_id"       default="0"     doc="ArUco marker ID to track" />
+  <arg name="approach_offset" default="0.15"  doc="Stand-off distance from marker (m)" />
+  <arg name="enable_motion"   default="false" doc="Start with motion enabled" />
+  <arg name="debug"           default="false" doc="Publish annotated debug image" />
+
+  <!-- ── oarbot_blue (right arm) ─────────────────────────────────────────── -->
+  <group if="$(eval arg('robot') == 'blue')" ns="oarbot_blue">
+    <machine name="oarbot-blue-P15"
+             address="192.168.1.102"
+             env-loader="/home/oarbot_blue/catkin_ws_assistive/src/assistive_launch/scripts/env_oarbot_blue.sh"
+             user="oarbot_blue" password="1234"
+             default="true"/>
+
+    <node name="aruco_marker_follower"
+          pkg="assistive_controllers"
+          type="aruco_marker_follower.py"
+          output="screen">
+
+      <!-- Load base config for oarbot_blue -->
+      <rosparam file="$(find assistive_launch)/config/oarbot_blue_aruco_marker_follower.yaml"/>
+
+      <!-- Allow command-line overrides -->
+      <param name="marker_id"       value="$(arg marker_id)" />
+      <param name="approach_offset_m" value="$(arg approach_offset)" />
+      <param name="enable_motion"   value="$(arg enable_motion)" />
+      <param name="debug_image_view" value="$(arg debug)" />
+    </node>
+  </group>
+
+  <!-- ── oarbot_silver (left arm) ────────────────────────────────────────── -->
+  <group if="$(eval arg('robot') == 'silver')" ns="oarbot_silver">
+    <machine name="oarbot-silver-P15"
+             address="192.168.1.104"
+             env-loader="/home/oarbot_silver/catkin_ws_assistive/src/assistive_launch/scripts/env_oarbot_silver.sh"
+             user="oarbot_silver" password="1234"
+             default="true"/>
+
+    <node name="aruco_marker_follower"
+          pkg="assistive_controllers"
+          type="aruco_marker_follower.py"
+          output="screen">
+
+      <!-- Load base config for oarbot_silver -->
+      <rosparam file="$(find assistive_launch)/config/oarbot_silver_aruco_marker_follower.yaml"/>
+
+      <!-- Allow command-line overrides -->
+      <param name="marker_id"       value="$(arg marker_id)" />
+      <param name="approach_offset_m" value="$(arg approach_offset)" />
+      <param name="enable_motion"   value="$(arg enable_motion)" />
+      <param name="debug_image_view" value="$(arg debug)" />
+    </node>
+  </group>
+
+</launch>
