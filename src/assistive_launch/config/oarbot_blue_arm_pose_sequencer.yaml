@@ -14,13 +14,16 @@ timeout: 15.0   # seconds to wait for each move to complete
 
 configurations:
   - name: "Home"
-    joints: [270.0, 235.0, 55.0, 215.0, 265.0, 100.0]
+    joints: [270.0, 175.0, 59.0, 240.0, 84.0, 95.0]
 
   - name: "Config 2"
-    joints: [270.0, 210.0, 90.0, 215.0, 265.0, 100.0]
+    joints: [257.0, 241.0, 120.0, 344.0, 61.0, 52.0]
+    
+  - name: "Back_Home"
+    joints: [270.0, 175.0, 59.0, 240.0, 84.0, 95.0]
 
   - name: "Config 3"
-    joints: [270.0, 185.0, 120.0, 215.0, 265.0, 100.0]
+    joints: [266.0, 234.0, 89.0, 338.0, 48.0, 52.0]
 
   # Add more configurations below in the same format:
   # - name: "My pose"
