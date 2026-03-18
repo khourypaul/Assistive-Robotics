@@ -41,9 +41,12 @@ import sys
 import select
 import threading
 
+import math
+
 import rospy
 import actionlib
 import kinova_msgs.msg
+from sensor_msgs.msg import JointState
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +77,7 @@ class ArmJointJogger:
 
         self.joint_state_topic = rospy.get_param(
             '~joint_state_topic',
-            '/oarbot_blue/j2n6s300_right_driver/out/joint_angles')
+            '/oarbot_blue/j2n6s300_right_driver/out/joint_state')
 
         self.mode       = rospy.get_param('~mode',      'keyboard')
         self.step_size  = rospy.get_param('~step_size',  5.0)   # degrees
@@ -87,7 +90,7 @@ class ArmJointJogger:
         # Subscribe to joint angle feedback
         self._sub = rospy.Subscriber(
             self.joint_state_topic,
-            kinova_msgs.msg.JointAngles,
+            JointState,
             self._joint_angles_cb,
             queue_size=1)
 
@@ -126,15 +129,10 @@ class ArmJointJogger:
     # ------------------------------------------------------------------
 
     def _joint_angles_cb(self, msg):
+        # sensor_msgs/JointState positions are in radians; convert to degrees
+        # for use with ArmJointAnglesGoal (which expects degrees)
         with self._angles_lock:
-            self._angles = [
-                msg.joint1,
-                msg.joint2,
-                msg.joint3,
-                msg.joint4,
-                msg.joint5,
-                msg.joint6,
-            ]
+            self._angles = [math.degrees(p) for p in msg.position[:6]]
 
     def _get_angles(self):
         with self._angles_lock:
