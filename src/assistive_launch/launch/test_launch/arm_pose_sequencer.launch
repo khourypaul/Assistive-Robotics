@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<launch>
+
+  <!--
+    arm_pose_sequencer.launch
+    =========================
+    Cycles the arm through a list of pre-defined joint configurations.
+
+    Controls (in the terminal window):
+      SPACE / ENTER / N  →  next config
+      P / B              →  previous config
+      0-9                →  jump to config by index
+      Q / ESC            →  quit
+
+    Arguments
+    ---------
+    robot  : 'blue'   → oarbot_blue  (j2n6s300 right arm)   [default]
+             'silver' → oarbot_silver (j2n6s300 left arm)
+
+    Usage
+    -----
+    roslaunch assistive_launch arm_pose_sequencer.launch
+    roslaunch assistive_launch arm_pose_sequencer.launch robot:=silver
+  -->
+
+  <arg name="robot" default="blue" doc="'blue' or 'silver'" />
+
+  <!-- ── oarbot_blue ─────────────────────────────────────────────────── -->
+  <group if="$(eval arg('robot') == 'blue')">
+    <node name="arm_pose_sequencer" pkg="assistive_controllers"
+          type="arm_pose_sequencer.py" output="screen"
+          launch-prefix="xterm -e">
+      <rosparam file="$(find assistive_launch)/config/oarbot_blue_arm_pose_sequencer.yaml"/>
+    </node>
+  </group>
+
+  <!-- ── oarbot_silver ───────────────────────────────────────────────── -->
+  <group if="$(eval arg('robot') == 'silver')">
+    <node name="arm_pose_sequencer" pkg="assistive_controllers"
+          type="arm_pose_sequencer.py" output="screen"
+          launch-prefix="xterm -e">
+      <rosparam file="$(find assistive_launch)/config/oarbot_silver_arm_pose_sequencer.yaml"/>
+    </node>
+  </group>
+
+</launch>

@@ -1,0 +1,27 @@
+# Arm Pose Sequencer – oarbot_blue (j2n6s300 RIGHT arm)
+# Used by: assistive_launch/launch/test_launch/arm_pose_sequencer.launch
+#
+# All joint angles are in DEGREES.
+# Joint order: [J1, J2, J3, J4, J5, J6]
+#
+# To find good values: run arm_joint_jogger.py in keyboard mode, move the arm
+# to the desired pose, then read the joint angles from the terminal status line.
+
+action_address:    '/oarbot_blue/j2n6s300_right_driver/joints_action/joint_angles'
+joint_state_topic: '/oarbot_blue/j2n6s300_right_driver/out/joint_state'
+
+timeout: 15.0   # seconds to wait for each move to complete
+
+configurations:
+  - name: "Home"
+    joints: [270.0, 235.0, 55.0, 215.0, 265.0, 100.0]
+
+  - name: "Config 2"
+    joints: [270.0, 210.0, 90.0, 215.0, 265.0, 100.0]
+
+  - name: "Config 3"
+    joints: [270.0, 185.0, 120.0, 215.0, 265.0, 100.0]
+
+  # Add more configurations below in the same format:
+  # - name: "My pose"
+  #   joints: [J1, J2, J3, J4, J5, J6]
