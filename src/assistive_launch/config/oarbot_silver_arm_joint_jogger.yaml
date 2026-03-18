@@ -1,0 +1,11 @@
+# arm_joint_jogger config for oarbot_silver (j2n6s300 LEFT arm)
+# Used by: assistive_launch/launch/test_launch/arm_joint_jogger.launch
+
+action_address:    '/oarbot_silver/j2n6s300_left_driver/joints_action/joint_angles'
+joint_state_topic: '/oarbot_silver/j2n6s300_left_driver/out/joint_angles'
+
+# Keyboard mode initial step size in degrees
+step_size: 5.0
+
+# Action result wait timeout in seconds (single mode)
+timeout: 10.0

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find ./src -name \"CMakeLists.txt\" -exec grep -l \"catkin_python_setup\\\\|add_executable\" {})",
+      "Bash(ls -la src/*/src/*.py)",
+      "Bash(xargs wc:*)"
+    ]
+  }
+}

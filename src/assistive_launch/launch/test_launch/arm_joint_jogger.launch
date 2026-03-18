@@ -1,0 +1,71 @@
+<?xml version="1.0"?>
+<launch>
+
+  <!--
+    arm_joint_jogger.launch
+    =======================
+    Launch the arm joint jogger node for interactive terminal jogging of a
+    Kinova arm joint.
+
+    Arguments
+    ---------
+    robot   : 'blue'  → oarbot_blue  (j2n6s300 right arm)   [default]
+              'silver' → oarbot_silver (j2n6s300 left arm)
+
+    mode    : 'keyboard'  → interactive keyboard jog           [default]
+              'single'    → one-shot incremental command then exit
+
+    joint   : joint number 1-6 (used in single mode only)
+    delta   : delta in degrees  (used in single mode only, default 5.0)
+    step    : initial keyboard step size in degrees (default 5.0)
+
+    Usage examples
+    --------------
+    # Interactive keyboard jog of oarbot_blue arm:
+    roslaunch assistive_launch arm_joint_jogger.launch
+
+    # Interactive keyboard jog of oarbot_silver arm:
+    roslaunch assistive_launch arm_joint_jogger.launch robot:=silver
+
+    # Single command: jog joint 2 of oarbot_blue by +10 degrees:
+    roslaunch assistive_launch arm_joint_jogger.launch \
+        mode:=single joint:=2 delta:=10.0
+
+    # Or run directly without a launch file:
+    rosrun assistive_controllers arm_joint_jogger.py \
+        _action_address:=/oarbot_blue/j2n6s300_right_driver/joints_action/joint_angles \
+        _joint_state_topic:=/oarbot_blue/j2n6s300_right_driver/out/joint_angles \
+        _mode:=keyboard _step_size:=5.0
+  -->
+
+  <arg name="robot"  default="blue"     doc="'blue' or 'silver'" />
+  <arg name="mode"   default="keyboard" doc="'keyboard' or 'single'" />
+  <arg name="joint"  default="1"        doc="Joint number 1-6 (single mode)" />
+  <arg name="delta"  default="5.0"      doc="Delta in degrees (single mode)" />
+  <arg name="step"   default="5.0"      doc="Initial step size in degrees (keyboard mode)" />
+
+  <!-- ── oarbot_blue (right arm) ── -->
+  <group if="$(eval arg('robot') == 'blue')">
+    <node name="arm_joint_jogger" pkg="assistive_controllers"
+          type="arm_joint_jogger.py" output="screen" launch-prefix="xterm -e">
+      <rosparam file="$(find assistive_launch)/config/oarbot_blue_arm_joint_jogger.yaml" />
+      <param name="mode"      value="$(arg mode)"  />
+      <param name="joint"     value="$(arg joint)" />
+      <param name="delta"     value="$(arg delta)" />
+      <param name="step_size" value="$(arg step)"  />
+    </node>
+  </group>
+
+  <!-- ── oarbot_silver (left arm) ── -->
+  <group if="$(eval arg('robot') == 'silver')">
+    <node name="arm_joint_jogger" pkg="assistive_controllers"
+          type="arm_joint_jogger.py" output="screen" launch-prefix="xterm -e">
+      <rosparam file="$(find assistive_launch)/config/oarbot_silver_arm_joint_jogger.yaml" />
+      <param name="mode"      value="$(arg mode)"  />
+      <param name="joint"     value="$(arg joint)" />
+      <param name="delta"     value="$(arg delta)" />
+      <param name="step_size" value="$(arg step)"  />
+    </node>
+  </group>
+
+</launch>
