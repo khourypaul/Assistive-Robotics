@@ -13,12 +13,12 @@
       Q / ESC            - quit
 
     Arguments
-    ---------
-    robot  : 'blue'   - oarbot_blue  (j2n6s300 right arm)   [default]
-             'silver' - oarbot_silver (j2n6s300 left arm)
+    =========
+    robot  : 'blue'   ~ oarbot_blue  (j2n6s300 right arm)   [default]
+             'silver' ~ oarbot_silver (j2n6s300 left arm)
 
     Usage
-    -----
+    =====
     roslaunch assistive_launch arm_pose_sequencer.launch
     roslaunch assistive_launch arm_pose_sequencer.launch robot:=silver
   -->
